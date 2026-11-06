@@ -22,20 +22,26 @@ Requires Node.js `^20.19.0 || ^22.13.0 || >=24`. Tested with ESLint v10.
 Add the plugin to your `eslint.config.js`:
 
 ```js
+import { defineConfig } from "eslint/config";
 import shell from "@eslint/shell";
 
-export default [
-	// use the recommended rules for *.sh and *.bash files
-	shell.configs.recommended,
-];
+export default defineConfig([
+	{
+		// use the recommended rules for *.sh and *.bash files
+		files: ["**/*.sh", "**/*.bash"],
+		plugins: { shell },
+		extends: ["shell/recommended"],
+	},
+]);
 ```
 
 Or configure it manually:
 
 ```js
+import { defineConfig } from "eslint/config";
 import shell from "@eslint/shell";
 
-export default [
+export default defineConfig([
 	{
 		files: ["**/*.sh"],
 		plugins: { shell },
@@ -45,7 +51,7 @@ export default [
 			"shell/no-unquoted-expansions": "error",
 		},
 	},
-];
+]);
 ```
 
 ### Languages
@@ -59,14 +65,17 @@ The plugin provides one language per shell dialect:
 | `shell/mksh`  | MirBSD Korn shell.                    |
 
 ```js
-export default [
+import { defineConfig } from "eslint/config";
+import shell from "@eslint/shell";
+
+export default defineConfig([
 	{
 		files: ["**/*.sh"],
 		plugins: { shell },
+		extends: ["shell/recommended"],
 		language: "shell/posix",
-		rules: { "shell/no-backticks": "error" },
 	},
-];
+]);
 ```
 
 ## Rules
