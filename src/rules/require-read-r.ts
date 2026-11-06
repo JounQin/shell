@@ -32,7 +32,7 @@ const rule: ShellRuleDefinition<{ MessageIds: "missingR" }> = {
 		schema: [],
 		messages: {
 			missingR:
-				"read without -r will mangle backslashes. (ShellCheck SC2162)",
+				"Using read without -r will mangle backslashes. (ShellCheck SC2162)",
 		},
 	},
 
