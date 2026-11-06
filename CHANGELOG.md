@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/eslint/shell/compare/shell-v0.1.0...shell-v0.1.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* Remove ShellCheck codes from rule messages ([#26](https://github.com/eslint/shell/issues/26)) ([6aa7b41](https://github.com/eslint/shell/commit/6aa7b418075d5869d1fe354b6569036a29dd65b9))
+
 ## 0.1.0 (2026-10-31)
 
 
