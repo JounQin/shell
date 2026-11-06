@@ -1,6 +1,5 @@
 /**
  * @fileoverview Rule to require the `-r` flag when using `read`.
- * Mirrors ShellCheck SC2162.
  */
 
 //------------------------------------------------------------------------------
@@ -31,8 +30,7 @@ const rule: ShellRuleDefinition<{ MessageIds: "missingR" }> = {
 		fixable: "code",
 		schema: [],
 		messages: {
-			missingR:
-				"Using read without -r will mangle backslashes. (ShellCheck SC2162)",
+			missingR: "Using read without -r will mangle backslashes.",
 		},
 	},
 

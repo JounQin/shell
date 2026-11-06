@@ -1,6 +1,6 @@
 /**
  * @fileoverview Rule to require quoting expansions that undergo word
- * splitting and globbing. Mirrors ShellCheck SC2086/SC2046.
+ * splitting and globbing.
  */
 
 //------------------------------------------------------------------------------
@@ -42,9 +42,9 @@ const rule: ShellRuleDefinition<{
 		schema: [],
 		messages: {
 			unquotedParameterExpansion:
-				'Double quote "{{expansion}}" to prevent word splitting and globbing. (ShellCheck SC2086)',
+				'Double quote "{{expansion}}" to prevent word splitting and globbing.',
 			unquotedCommandSubstitution:
-				"Quote this command substitution to prevent word splitting. (ShellCheck SC2046)",
+				"Quote this command substitution to prevent word splitting.",
 		},
 	},
 

@@ -1,6 +1,5 @@
 /**
  * @fileoverview Rule to require handling `cd` failure.
- * Mirrors ShellCheck SC2164.
  */
 
 //------------------------------------------------------------------------------
@@ -29,7 +28,7 @@ const rule: ShellRuleDefinition<{
 		schema: [],
 		messages: {
 			uncheckedCd:
-				"Use 'cd ... || exit' or 'cd ... || return' in case cd fails. (ShellCheck SC2164)",
+				"Use 'cd ... || exit' or 'cd ... || return' in case cd fails.",
 			addGuard: "Add '|| exit' after the cd command.",
 		},
 	},

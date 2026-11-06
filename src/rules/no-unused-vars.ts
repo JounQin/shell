@@ -1,6 +1,5 @@
 /**
  * @fileoverview Rule to flag variables that are assigned but never used.
- * Mirrors ShellCheck SC2034.
  */
 
 //------------------------------------------------------------------------------
@@ -102,8 +101,7 @@ const rule: ShellRuleDefinition<{
 		],
 		defaultOptions: [{}],
 		messages: {
-			unusedVariable:
-				"Variable '{{name}}' is assigned but never used. (ShellCheck SC2034)",
+			unusedVariable: "Variable '{{name}}' is assigned but never used.",
 		},
 	},
 

@@ -1,6 +1,5 @@
 /**
  * @fileoverview Rule to disallow iterating over `ls` output.
- * Mirrors ShellCheck SC2045.
  */
 
 //------------------------------------------------------------------------------
@@ -26,7 +25,7 @@ const rule: ShellRuleDefinition<{ MessageIds: "lsIteration" }> = {
 		schema: [],
 		messages: {
 			lsIteration:
-				"Iterating over ls output is fragile. Use globs (e.g. *) instead. (ShellCheck SC2045)",
+				"Iterating over ls output is fragile. Use globs (e.g. *) instead.",
 		},
 	},
 

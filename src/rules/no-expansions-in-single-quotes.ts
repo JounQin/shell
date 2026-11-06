@@ -1,6 +1,5 @@
 /**
  * @fileoverview Rule to flag expansion-like text inside single quotes.
- * Mirrors ShellCheck SC2016.
  */
 
 //------------------------------------------------------------------------------
@@ -36,7 +35,7 @@ const rule: ShellRuleDefinition<{ MessageIds: "expansionInSingleQuotes" }> = {
 		schema: [],
 		messages: {
 			expansionInSingleQuotes:
-				"Expressions don't expand in single quotes; use double quotes for that. (ShellCheck SC2016)",
+				"Expressions don't expand in single quotes; use double quotes for that.",
 		},
 	},
 

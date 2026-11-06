@@ -1,6 +1,5 @@
 /**
  * @fileoverview Rule to disallow legacy backtick command substitution.
- * Mirrors ShellCheck SC2006.
  */
 
 //------------------------------------------------------------------------------
@@ -25,8 +24,7 @@ const rule: ShellRuleDefinition<{ MessageIds: "useDollarParen" }> = {
 		fixable: "code",
 		schema: [],
 		messages: {
-			useDollarParen:
-				"Use $(...) notation instead of legacy backticks. (ShellCheck SC2006)",
+			useDollarParen: "Use $(...) notation instead of legacy backticks.",
 		},
 	},
 

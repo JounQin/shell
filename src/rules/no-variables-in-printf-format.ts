@@ -1,6 +1,5 @@
 /**
  * @fileoverview Rule to disallow variables in the printf format string.
- * Mirrors ShellCheck SC2059.
  */
 
 //------------------------------------------------------------------------------
@@ -26,7 +25,7 @@ const rule: ShellRuleDefinition<{ MessageIds: "variableInFormat" }> = {
 		schema: [],
 		messages: {
 			variableInFormat:
-				"Don't use variables in the printf format string. Use printf '...%s...' \"$foo\". (ShellCheck SC2059)",
+				"Don't use variables in the printf format string. Use printf '...%s...' \"$foo\".",
 		},
 	},
 

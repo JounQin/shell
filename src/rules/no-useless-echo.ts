@@ -1,6 +1,5 @@
 /**
  * @fileoverview Rule to disallow `$(echo ...)` command substitutions.
- * Mirrors ShellCheck SC2116.
  */
 
 //------------------------------------------------------------------------------
@@ -25,7 +24,7 @@ const rule: ShellRuleDefinition<{ MessageIds: "uselessEcho" }> = {
 		schema: [],
 		messages: {
 			uselessEcho:
-				"Useless echo? Instead of 'cmd $(echo foo)', just use 'cmd foo'. (ShellCheck SC2116)",
+				"Useless echo? Instead of 'cmd $(echo foo)', just use 'cmd foo'.",
 		},
 	},
 

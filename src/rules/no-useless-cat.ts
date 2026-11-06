@@ -1,6 +1,5 @@
 /**
  * @fileoverview Rule to disallow piping from a single-file `cat`.
- * Mirrors ShellCheck SC2002.
  */
 
 //------------------------------------------------------------------------------
@@ -54,7 +53,7 @@ const rule: ShellRuleDefinition<{ MessageIds: "uselessCat" }> = {
 		schema: [],
 		messages: {
 			uselessCat:
-				"Useless cat. Consider 'cmd < file' or 'cmd file' instead. (ShellCheck SC2002)",
+				"Useless cat. Consider 'cmd < file' or 'cmd file' instead.",
 		},
 	},
 
