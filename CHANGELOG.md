@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/eslint/shell/compare/shell-v0.1.1...shell-v0.1.2) (2026-11-06)
+
+
+### Bug Fixes
+
+* Bump minor version to trigger new release ([ef7acaf](https://github.com/eslint/shell/commit/ef7acaf5073f7a5bb77e870c99fb738a133f989e))
+
 ## [0.1.1](https://github.com/eslint/shell/compare/shell-v0.1.0...shell-v0.1.1) (2026-11-06)
 
 
