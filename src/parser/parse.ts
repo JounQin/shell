@@ -9,7 +9,7 @@
 // Imports
 //------------------------------------------------------------------------------
 
-import { LangVariant, NodeType, ParseError, Walk, parseSync } from "sh-syntax";
+import { LangVariant, ParseError, parseSync, walk } from "sh-syntax";
 import type {
 	ArithmeticExpressionNode,
 	ArrayElementNode,
@@ -232,8 +232,8 @@ class Translator {
 	collectComments(file: ShellNode): CommentNode[] {
 		const comments: CommentNode[] = [];
 
-		Walk(file, node => {
-			if (node && NodeType(node) === "Comment") {
+		walk(file, node => {
+			if (node.type === "Comment") {
 				const comment = node as ShellNode;
 
 				comments.push({
@@ -287,7 +287,7 @@ class Translator {
 	}
 
 	#translateCommand(cmd: ShellNode | null): StatementNode {
-		const nodeType = cmd === null ? "nil" : NodeType(cmd);
+		const nodeType = cmd === null ? "nil" : cmd.type;
 
 		switch (nodeType) {
 			case "nil":
@@ -360,7 +360,7 @@ class Translator {
 				);
 				const loop = clause.loop as ShellNode;
 
-				if (NodeType(loop) === "CStyleLoop") {
+				if (loop.type === "CStyleLoop") {
 					return {
 						type: "ArithmeticForStatement",
 						...base,
@@ -522,7 +522,7 @@ class Translator {
 				!stmt.background &&
 				((stmt.redirs ?? []) as ShellNode[]).length === 0;
 
-			if (inner !== null && isBare && NodeType(inner) === "BinaryCmd") {
+			if (inner !== null && isBare && inner.type === "BinaryCmd") {
 				const operator = this.#binaryCommandOperator(inner);
 
 				if (operator === "|" || operator === "|&") {
@@ -701,7 +701,7 @@ class Translator {
 	}
 
 	translateWordPart(part: ShellNode): WordPartNode {
-		const nodeType = NodeType(part);
+		const nodeType = part.type;
 		const start = this.#start(part);
 		const end = this.#end(part);
 
@@ -884,7 +884,7 @@ class Translator {
 	}
 
 	translateArithmetic(expr: ShellNode): ArithmeticExpressionNode {
-		const nodeType = NodeType(expr);
+		const nodeType = expr.type;
 		const start = this.#start(expr);
 		const end = this.#end(expr);
 
@@ -933,7 +933,7 @@ class Translator {
 	}
 
 	translateTest(expr: ShellNode): TestExpressionNode {
-		const nodeType = NodeType(expr);
+		const nodeType = expr.type;
 		const start = this.#start(expr);
 		const end = this.#end(expr);
 
