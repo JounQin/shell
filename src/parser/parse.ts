@@ -11,6 +11,23 @@
 
 import { LangVariant, ParseError, parseSync, walk } from "sh-syntax";
 import type {
+	ArithmExpr,
+	Assign,
+	ArrayExpr,
+	CaseItem,
+	Command,
+	File,
+	IfClause,
+	Lit,
+	Node,
+	ParamExp,
+	Redirect,
+	Stmt,
+	TestExpr,
+	Word,
+	WordPart,
+} from "sh-syntax";
+import type {
 	ArithmeticExpressionNode,
 	ArrayElementNode,
 	ArrayExpressionNode,
@@ -33,19 +50,15 @@ import type {
 // Helpers
 //------------------------------------------------------------------------------
 
-interface ShellPos {
-	offset: number;
-	line: number;
-	column: number;
-}
+type NodeOf<T extends Node["type"]> = Extract<Node, { type: T }>;
 
-interface ShellNode {
-	type: string;
-	start: number;
-	end: number;
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- tree fields vary by node type
-	[field: string]: any;
-}
+const required = <T>(value: T | null, field: string): T => {
+	if (value === null) {
+		throw new TypeError(`Missing sh-syntax field ${field}.`);
+	}
+
+	return value;
+};
 
 const REDIRECT_OPERATOR = /^(?:&>>|&>|>\||>>|>&|<<<|<<-|<<|<&|<>|<|>)/u;
 const UNARY_ARITHMETIC_OPERATOR = /^(?:\+\+|--|[-+!~])/u;
@@ -168,11 +181,11 @@ class Translator {
 		this.#toChar = createByteToCharConverter(text);
 	}
 
-	#start(node: ShellNode): number {
+	#start(node: Node): number {
 		return this.#toChar(node.start);
 	}
 
-	#end(node: ShellNode): number {
+	#end(node: Node): number {
 		return this.#toChar(node.end);
 	}
 
@@ -181,12 +194,12 @@ class Translator {
 	 * e.g. the `&&` in `a && b`. Skips surrounding whitespace and any
 	 * comments on either side of the operator.
 	 */
-	#operatorBetween(left: ShellNode, right: ShellNode): string {
+	#operatorBetween(left: Node, right: Node): string {
 		const slice = this.#text
 			.slice(this.#end(left), this.#start(right))
 			.replace(LEADING_TRIVIA, "");
 
-		return slice.split(/\s+/u)[0] as string;
+		return slice.split(/\s+/u)[0] ?? "";
 	}
 
 	/**
@@ -197,8 +210,8 @@ class Translator {
 	 * end past the operator, so the slice comes out empty. See the heredoc
 	 * section of `docs/syntax-tree.md`.
 	 */
-	#binaryCommandOperator(binary: ShellNode): string {
-		const opPos = binary.opPos as ShellPos;
+	#binaryCommandOperator(binary: NodeOf<"BinaryCmd">): string {
+		const opPos = binary.opPos;
 
 		return (
 			this.#operatorAt(
@@ -214,33 +227,31 @@ class Translator {
 	#operatorAt(offset: number, pattern: RegExp): string | null {
 		const match = pattern.exec(this.#text.slice(offset, offset + 3));
 
-		return match ? (match[0] as string) : null;
+		return match ? match[0] : null;
 	}
 
-	translateProgram(file: ShellNode): ProgramNode {
+	translateProgram(file: File): ProgramNode {
 		return {
 			type: "Program",
 			start: 0,
 			end: this.#text.length,
-			body: (file.stmts as ShellNode[]).map(stmt =>
-				this.translateStatement(stmt),
-			),
+			body: file.stmts.map(stmt => this.translateStatement(stmt)),
 			comments: this.collectComments(file),
 		};
 	}
 
-	collectComments(file: ShellNode): CommentNode[] {
+	collectComments(file: File): CommentNode[] {
 		const comments: CommentNode[] = [];
 
 		walk(file, node => {
 			if (node.type === "Comment") {
-				const comment = node as ShellNode;
+				const comment = node;
 
 				comments.push({
 					type: "Comment",
 					start: this.#start(comment),
 					end: this.#end(comment),
-					text: comment.text as string,
+					text: comment.text,
 				});
 			}
 
@@ -256,12 +267,12 @@ class Translator {
 	 * Translates a `Stmt`, folding its statement-level properties
 	 * (redirects, negation, background) into the command node.
 	 */
-	translateStatement(stmt: ShellNode): StatementNode {
-		const node = this.#translateCommand(stmt.cmd as ShellNode | null);
+	translateStatement(stmt: Stmt): StatementNode {
+		const node = this.#translateCommand(stmt.cmd);
 
 		node.start = this.#start(stmt);
 		node.end = this.#end(stmt);
-		node.redirects = ((stmt.redirs ?? []) as ShellNode[]).map(redirect =>
+		node.redirects = (stmt.redirs ?? []).map(redirect =>
 			this.translateRedirect(redirect),
 		);
 		node.negated = Boolean(stmt.negated);
@@ -270,7 +281,7 @@ class Translator {
 		return node;
 	}
 
-	#statementBase(node: ShellNode | null): {
+	#statementBase(node: Node | null): {
 		start: number;
 		end: number;
 		redirects: RedirectNode[];
@@ -286,30 +297,27 @@ class Translator {
 		};
 	}
 
-	#translateCommand(cmd: ShellNode | null): StatementNode {
-		const nodeType = cmd === null ? "nil" : cmd.type;
+	#translateCommand(cmd: Command | null): StatementNode {
+		if (cmd === null) {
+			// A statement with only redirects, such as `> file`.
+			return {
+				type: "Command",
+				...this.#statementBase(null),
+				assignments: [],
+				name: null,
+				arguments: [],
+			};
+		}
 
-		switch (nodeType) {
-			case "nil":
-				// A statement with only redirects, such as `> file`.
-				return {
-					type: "Command",
-					...this.#statementBase(null),
-					assignments: [],
-					name: null,
-					arguments: [],
-				};
-
+		switch (cmd.type) {
 			case "CallExpr": {
-				const call = cmd as ShellNode;
-				const args = (call.args as ShellNode[]).map(word =>
-					this.translateWord(word),
-				);
+				const call = cmd;
+				const args = call.args.map(word => this.translateWord(word));
 
 				return {
 					type: "Command",
 					...this.#statementBase(call),
-					assignments: (call.assigns as ShellNode[]).map(assign =>
+					assignments: call.assigns.map(assign =>
 						this.translateAssignment(assign),
 					),
 					name: args[0] ?? null,
@@ -318,7 +326,7 @@ class Translator {
 			}
 
 			case "BinaryCmd": {
-				const binary = cmd as ShellNode;
+				const binary = cmd;
 				const operator = this.#binaryCommandOperator(binary);
 
 				if (operator === "|" || operator === "|&") {
@@ -329,21 +337,25 @@ class Translator {
 					type: "LogicalExpression",
 					...this.#statementBase(binary),
 					operator: operator === "&&" ? "&&" : "||",
-					left: this.translateStatement(binary.x as ShellNode),
-					right: this.translateStatement(binary.y as ShellNode),
+					left: this.translateStatement(
+						required(binary.x, "BinaryCmd.x"),
+					),
+					right: this.translateStatement(
+						required(binary.y, "BinaryCmd.y"),
+					),
 				};
 			}
 
 			case "IfClause":
-				return this.#translateIfClause(cmd as ShellNode);
+				return this.#translateIfClause(cmd);
 
 			case "WhileClause": {
-				const clause = cmd as ShellNode;
+				const clause = cmd;
 				const base = this.#statementBase(clause);
-				const test = (clause.cond as ShellNode[]).map(stmt =>
+				const test = clause.cond.map(stmt =>
 					this.translateStatement(stmt),
 				);
-				const body = (clause.do as ShellNode[]).map(stmt =>
+				const body = clause.do.map(stmt =>
 					this.translateStatement(stmt),
 				);
 
@@ -353,25 +365,25 @@ class Translator {
 			}
 
 			case "ForClause": {
-				const clause = cmd as ShellNode;
+				const clause = cmd;
 				const base = this.#statementBase(clause);
-				const body = (clause.do as ShellNode[]).map(stmt =>
+				const body = clause.do.map(stmt =>
 					this.translateStatement(stmt),
 				);
-				const loop = clause.loop as ShellNode;
+				const loop = required(clause.loop, "ForClause.loop");
 
 				if (loop.type === "CStyleLoop") {
 					return {
 						type: "ArithmeticForStatement",
 						...base,
 						init: loop.init
-							? this.translateArithmetic(loop.init as ShellNode)
+							? this.translateArithmetic(loop.init)
 							: null,
 						test: loop.cond
-							? this.translateArithmetic(loop.cond as ShellNode)
+							? this.translateArithmetic(loop.cond)
 							: null,
 						update: loop.post
-							? this.translateArithmetic(loop.post as ShellNode)
+							? this.translateArithmetic(loop.post)
 							: null,
 						body,
 					};
@@ -381,9 +393,9 @@ class Translator {
 					type: "ForStatement",
 					...base,
 					variable: loop.name
-						? this.#translateIdentifier(loop.name as ShellNode)
+						? this.#translateIdentifier(loop.name)
 						: null,
-					words: ((loop.items ?? []) as ShellNode[]).map(word =>
+					words: (loop.items ?? []).map(word =>
 						this.translateWord(word),
 					),
 					body,
@@ -392,13 +404,15 @@ class Translator {
 			}
 
 			case "CaseClause": {
-				const clause = cmd as ShellNode;
+				const clause = cmd;
 
 				return {
 					type: "CaseStatement",
 					...this.#statementBase(clause),
-					discriminant: this.translateWord(clause.word as ShellNode),
-					cases: (clause.items as ShellNode[]).map(item =>
+					discriminant: this.translateWord(
+						required(clause.word, "CaseClause.word"),
+					),
+					cases: clause.items.map(item =>
 						this.#translateCaseItem(item),
 					),
 				};
@@ -408,28 +422,28 @@ class Translator {
 				return {
 					type: "BlockStatement",
 					...this.#statementBase(cmd),
-					body: ((cmd as ShellNode).stmts as ShellNode[]).map(stmt =>
-						this.translateStatement(stmt),
-					),
+					body: cmd.stmts.map(stmt => this.translateStatement(stmt)),
 				};
 
 			case "Subshell":
 				return {
 					type: "Subshell",
 					...this.#statementBase(cmd),
-					body: ((cmd as ShellNode).stmts as ShellNode[]).map(stmt =>
-						this.translateStatement(stmt),
-					),
+					body: cmd.stmts.map(stmt => this.translateStatement(stmt)),
 				};
 
 			case "FuncDecl": {
-				const decl = cmd as ShellNode;
+				const decl = cmd;
 
 				return {
 					type: "FunctionDeclaration",
 					...this.#statementBase(decl),
-					id: this.#translateIdentifier(decl.name as ShellNode),
-					body: this.translateStatement(decl.body as ShellNode),
+					id: this.#translateIdentifier(
+						required(decl.name, "FuncDecl.name"),
+					),
+					body: this.translateStatement(
+						required(decl.body, "FuncDecl.body"),
+					),
 				};
 			}
 
@@ -438,59 +452,57 @@ class Translator {
 					type: "TestCommand",
 					...this.#statementBase(cmd),
 					expression: this.translateTest(
-						(cmd as ShellNode).x as ShellNode,
+						required(cmd.x, "TestClause.x"),
 					),
 				};
 
 			case "ArithmCmd": {
-				const arith = cmd as ShellNode;
+				const arith = cmd;
 
 				return {
 					type: "ArithmeticCommand",
 					...this.#statementBase(arith),
 					expression: arith.x
-						? this.translateArithmetic(arith.x as ShellNode)
+						? this.translateArithmetic(arith.x)
 						: null,
 				};
 			}
 
 			case "DeclClause": {
-				const decl = cmd as ShellNode;
+				const decl = cmd;
 
 				return {
 					type: "DeclarationCommand",
 					...this.#statementBase(decl),
-					kind: (decl.variant as ShellNode).value as string,
-					arguments: (decl.args as ShellNode[]).map(assign =>
+					kind: required(decl.variant, "DeclClause.variant").value,
+					arguments: decl.args.map(assign =>
 						this.#translateDeclarationArgument(assign),
 					),
 				};
 			}
 
 			case "TimeClause": {
-				const clause = cmd as ShellNode;
+				const clause = cmd;
 
 				return {
 					type: "TimeCommand",
 					...this.#statementBase(clause),
 					posix: Boolean(clause.posixFormat),
 					body: clause.stmt
-						? this.translateStatement(clause.stmt as ShellNode)
+						? this.translateStatement(clause.stmt)
 						: null,
 				};
 			}
 
 			case "CoprocClause": {
-				const clause = cmd as ShellNode;
+				const clause = cmd;
 
 				return {
 					type: "CoprocCommand",
 					...this.#statementBase(clause),
-					name: clause.name
-						? this.translateWord(clause.name as ShellNode)
-						: null,
+					name: clause.name ? this.translateWord(clause.name) : null,
 					body: clause.stmt
-						? this.translateStatement(clause.stmt as ShellNode)
+						? this.translateStatement(clause.stmt)
 						: null,
 				};
 			}
@@ -499,37 +511,39 @@ class Translator {
 				return {
 					type: "LetCommand",
 					...this.#statementBase(cmd),
-					expressions: ((cmd as ShellNode).exprs as ShellNode[]).map(
-						expr => this.translateArithmetic(expr),
+					expressions: cmd.exprs.map(expr =>
+						this.translateArithmetic(expr),
 					),
 				};
 
 			default:
 				throw new Error(
-					`Unsupported sh-syntax node type: ${nodeType}.`,
+					`Unsupported sh-syntax node type: ${cmd.type}.`,
 				);
 		}
 	}
 
-	#translatePipeline(binary: ShellNode): StatementNode {
+	#translatePipeline(binary: NodeOf<"BinaryCmd">): StatementNode {
 		const commands: StatementNode[] = [];
 		const operators: ("|" | "|&")[] = [];
 
-		const collect = (stmt: ShellNode): void => {
-			const inner = stmt.cmd as ShellNode | null;
+		const collect = (stmt: Stmt): void => {
+			const inner = stmt.cmd;
 			const isBare =
 				!stmt.negated &&
 				!stmt.background &&
-				((stmt.redirs ?? []) as ShellNode[]).length === 0;
+				(stmt.redirs ?? []).length === 0;
 
 			if (inner !== null && isBare && inner.type === "BinaryCmd") {
 				const operator = this.#binaryCommandOperator(inner);
 
 				if (operator === "|" || operator === "|&") {
-					collect(inner.x as ShellNode);
+					collect(required(inner.x, "BinaryCmd.x"));
 					operators.push(operator);
 					commands.push(
-						this.translateStatement(inner.y as ShellNode),
+						this.translateStatement(
+							required(inner.y, "BinaryCmd.y"),
+						),
 					);
 					return;
 				}
@@ -540,9 +554,11 @@ class Translator {
 
 		const operator = this.#binaryCommandOperator(binary) as "|" | "|&";
 
-		collect(binary.x as ShellNode);
+		collect(required(binary.x, "BinaryCmd.x"));
 		operators.push(operator);
-		commands.push(this.translateStatement(binary.y as ShellNode));
+		commands.push(
+			this.translateStatement(required(binary.y, "BinaryCmd.y")),
+		);
 
 		return {
 			type: "Pipeline",
@@ -552,19 +568,19 @@ class Translator {
 		};
 	}
 
-	#translateIfClause(clause: ShellNode): IfStatementNode {
+	#translateIfClause(clause: IfClause): IfStatementNode {
 		let alternate: IfStatementNode | ElseClauseNode | null = null;
-		const elseClause = clause.else as ShellNode | null;
+		const elseClause = clause.else;
 
 		if (elseClause) {
-			if ((elseClause.cond as ShellNode[]).length > 0) {
+			if (elseClause.cond.length > 0) {
 				alternate = this.#translateIfClause(elseClause);
 			} else {
 				alternate = {
 					type: "ElseClause",
 					start: this.#start(elseClause),
 					end: this.#end(elseClause),
-					body: (elseClause.then as ShellNode[]).map(stmt =>
+					body: elseClause.then.map(stmt =>
 						this.translateStatement(stmt),
 					),
 				};
@@ -574,62 +590,46 @@ class Translator {
 		return {
 			type: "IfStatement",
 			...this.#statementBase(clause),
-			test: (clause.cond as ShellNode[]).map(stmt =>
-				this.translateStatement(stmt),
-			),
-			consequent: (clause.then as ShellNode[]).map(stmt =>
-				this.translateStatement(stmt),
-			),
+			test: clause.cond.map(stmt => this.translateStatement(stmt)),
+			consequent: clause.then.map(stmt => this.translateStatement(stmt)),
 			alternate,
 		};
 	}
 
-	#translateCaseItem(item: ShellNode): CaseClauseNode {
-		const opPos = item.opPos as ShellPos;
+	#translateCaseItem(item: CaseItem): CaseClauseNode {
+		const opPos = item.opPos;
 		const hasTerminator = opPos.line !== 0;
 
 		return {
 			type: "CaseClause",
 			start: this.#start(item),
 			end: this.#end(item),
-			patterns: (item.patterns as ShellNode[]).map(word =>
-				this.translateWord(word),
-			),
-			body: (item.stmts as ShellNode[]).map(stmt =>
-				this.translateStatement(stmt),
-			),
+			patterns: item.patterns.map(word => this.translateWord(word)),
+			body: item.stmts.map(stmt => this.translateStatement(stmt)),
 			terminator: hasTerminator
 				? this.#operatorAt(this.#toChar(opPos.offset), CASE_TERMINATOR)
 				: null,
 		};
 	}
 
-	#translateIdentifier(lit: ShellNode): IdentifierNode {
+	#translateIdentifier(lit: Lit): IdentifierNode {
 		return {
 			type: "Identifier",
 			start: this.#start(lit),
 			end: this.#end(lit),
-			name: lit.value as string,
+			name: lit.value,
 		};
 	}
 
-	translateAssignment(assign: ShellNode): VariableAssignmentNode {
+	translateAssignment(assign: Assign): VariableAssignmentNode {
 		return {
 			type: "VariableAssignment",
 			start: this.#start(assign),
 			end: this.#end(assign),
-			name: assign.name
-				? this.#translateIdentifier(assign.name as ShellNode)
-				: null,
-			index: assign.index
-				? this.translateArithmetic(assign.index as ShellNode)
-				: null,
-			value: assign.value
-				? this.translateWord(assign.value as ShellNode)
-				: null,
-			array: assign.array
-				? this.#translateArray(assign.array as ShellNode)
-				: null,
+			name: assign.name ? this.#translateIdentifier(assign.name) : null,
+			index: assign.index ? this.translateArithmetic(assign.index) : null,
+			value: assign.value ? this.translateWord(assign.value) : null,
+			array: assign.array ? this.#translateArray(assign.array) : null,
 			append: Boolean(assign.append),
 		};
 	}
@@ -639,79 +639,70 @@ class Translator {
 	 * plain words such as flags (`-x`) become nameless naked assigns.
 	 */
 	#translateDeclarationArgument(
-		assign: ShellNode,
+		assign: Assign,
 	): VariableAssignmentNode | WordNode {
 		if (!assign.name && assign.naked && assign.value) {
-			return this.translateWord(assign.value as ShellNode);
+			return this.translateWord(assign.value);
 		}
 
 		return this.translateAssignment(assign);
 	}
 
-	#translateArray(array: ShellNode): ArrayExpressionNode {
+	#translateArray(array: ArrayExpr): ArrayExpressionNode {
 		return {
 			type: "ArrayExpression",
 			start: this.#start(array),
 			end: this.#end(array),
-			elements: (array.elems as ShellNode[]).map(
-				(element): ArrayElementNode => ({
-					type: "ArrayElement",
-					start: this.#start(element),
-					end: this.#end(element),
-					index: element.index
-						? this.translateArithmetic(element.index as ShellNode)
-						: null,
-					value: element.value
-						? this.translateWord(element.value as ShellNode)
-						: null,
-				}),
-			),
+			elements: array.elems.map((element): ArrayElementNode => ({
+				type: "ArrayElement",
+				start: this.#start(element),
+				end: this.#end(element),
+				index: element.index
+					? this.translateArithmetic(element.index)
+					: null,
+				value: element.value ? this.translateWord(element.value) : null,
+			})),
 		};
 	}
 
-	translateRedirect(redirect: ShellNode): RedirectNode {
-		const opPos = redirect.opPos as ShellPos;
+	translateRedirect(redirect: Redirect): RedirectNode {
+		const opPos = redirect.opPos;
 		const opStart = this.#toChar(opPos.offset);
 		const operator = this.#operatorAt(opStart, REDIRECT_OPERATOR) ?? ">";
-		const fdLit = redirect.n as ShellNode | null;
-		const target = redirect.word as ShellNode | null;
+		const fdLit = redirect.n;
+		const target = redirect.word;
 
 		return {
 			type: "Redirect",
 			start: fdLit ? this.#start(fdLit) : opStart,
 			end: target ? this.#end(target) : opStart + operator.length,
 			operator,
-			fd: fdLit ? Number.parseInt(fdLit.value as string, 10) : null,
+			fd: fdLit ? Number.parseInt(fdLit.value, 10) : null,
 			target: target ? this.translateWord(target) : null,
-			heredoc: redirect.hdoc
-				? this.translateWord(redirect.hdoc as ShellNode)
-				: null,
+			heredoc: redirect.hdoc ? this.translateWord(redirect.hdoc) : null,
 		};
 	}
 
-	translateWord(word: ShellNode): WordNode {
+	translateWord(word: Word): WordNode {
 		return {
 			type: "Word",
 			start: this.#start(word),
 			end: this.#end(word),
-			parts: (word.parts as ShellNode[]).map(part =>
-				this.translateWordPart(part),
-			),
+			parts: word.parts.map(part => this.translateWordPart(part)),
 		};
 	}
 
-	translateWordPart(part: ShellNode): WordPartNode {
-		const nodeType = part.type;
+	translateWordPart(part: WordPart): WordPartNode {
 		const start = this.#start(part);
 		const end = this.#end(part);
 
-		switch (nodeType) {
+		switch (part.type) {
 			case "Lit":
 				return {
 					type: "Literal",
 					start,
 					end,
-					value: part.value as string,
+					value: part.value,
 				};
 
 			case "SglQuoted":
@@ -728,7 +719,7 @@ class Translator {
 					type: "DoubleQuotedString",
 					start,
 					end,
-					parts: (part.parts as ShellNode[]).map(inner =>
+					parts: part.parts.map(inner =>
 						this.translateWordPart(inner),
 					),
 					dollar: Boolean(part.dollar),
@@ -742,9 +733,7 @@ class Translator {
 					type: "CommandSubstitution",
 					start,
 					end,
-					body: (part.stmts as ShellNode[]).map(stmt =>
-						this.translateStatement(stmt),
-					),
+					body: part.stmts.map(stmt => this.translateStatement(stmt)),
 					backquotes: this.#text[start] === "`",
 				};
 
@@ -758,9 +747,7 @@ class Translator {
 							start,
 							PROCESS_SUBSTITUTION_OPERATOR,
 						) as "<(" | ">(") ?? "<(",
-					body: (part.stmts as ShellNode[]).map(stmt =>
-						this.translateStatement(stmt),
-					),
+					body: part.stmts.map(stmt => this.translateStatement(stmt)),
 				};
 
 			case "ArithmExp":
@@ -769,7 +756,7 @@ class Translator {
 					start,
 					end,
 					expression: part.x
-						? this.translateArithmetic(part.x as ShellNode)
+						? this.translateArithmetic(part.x)
 						: null,
 				};
 
@@ -781,8 +768,7 @@ class Translator {
 					operator:
 						(this.#operatorAt(start, EXTENDED_GLOB_OPERATOR) as
 							"@(" | "*(" | "+(" | "?(" | "!(") ?? "@(",
-					pattern: ((part.pattern as ShellNode)?.value ??
-						"") as string,
+					pattern: (part.pattern?.value ?? "") as string,
 				};
 
 			default:
@@ -797,13 +783,11 @@ class Translator {
 		}
 	}
 
-	#translateParameterExpansion(part: ShellNode): WordPartNode {
+	#translateParameterExpansion(part: ParamExp): WordPartNode {
 		const start = this.#start(part);
 		const end = this.#end(part);
-		const param = part.param as ShellNode;
-		const index = part.index
-			? this.translateArithmetic(part.index as ShellNode)
-			: null;
+		const param = required(part.param, "ParamExp.param");
+		const index = part.index ? this.translateArithmetic(part.index) : null;
 
 		let operator: string | null = null;
 		let word: WordNode | null = null;
@@ -821,42 +805,37 @@ class Translator {
 			operatorStart = bracket === -1 ? index.end : bracket + 1;
 		}
 
-		const rbrace = part.rbrace
-			? this.#toChar((part.rbrace as ShellPos).offset)
-			: end;
+		const rbrace = part.rbrace ? this.#toChar(part.rbrace.offset) : end;
 
 		if (part.slice) {
-			const slice = part.slice as ShellNode;
+			const slice = part.slice;
 
 			operator = ":";
 			sliceOffset = slice.offset
-				? this.translateArithmetic(slice.offset as ShellNode)
+				? this.translateArithmetic(slice.offset)
 				: null;
 			sliceLength = slice.length
-				? this.translateArithmetic(slice.length as ShellNode)
+				? this.translateArithmetic(slice.length)
 				: null;
 		} else if (part.repl) {
-			const repl = part.repl as ShellNode;
-			const orig = repl.orig as ShellNode | null;
+			const repl = part.repl;
+			const orig = repl.orig;
 			const origWord =
-				orig && (orig.parts as ShellNode[]).length > 0
-					? this.translateWord(orig)
-					: null;
+				orig && orig.parts.length > 0 ? this.translateWord(orig) : null;
 
 			operator = origWord
 				? this.#text.slice(operatorStart, origWord.start).trim()
-				: (repl.all as boolean)
+				: repl.all
 					? "//"
 					: "/";
 			word = origWord;
 			replacement =
-				repl.with &&
-				((repl.with as ShellNode).parts as ShellNode[]).length > 0
-					? this.translateWord(repl.with as ShellNode)
+				repl.with && repl.with.parts.length > 0
+					? this.translateWord(repl.with)
 					: null;
 		} else if (part.exp) {
-			const expansion = part.exp as ShellNode;
-			const expansionWord = expansion.word as ShellNode | null;
+			const expansion = part.exp;
+			const expansionWord = expansion.word;
 
 			word = expansionWord ? this.translateWord(expansionWord) : null;
 			operator = this.#text
@@ -870,7 +849,7 @@ class Translator {
 			type: "ParameterExpansion",
 			start,
 			end,
-			name: param.value as string,
+			name: param.value,
 			braced: !part.short,
 			indirect: Boolean(part.excl),
 			lengthOf: Boolean(part.length),
@@ -883,27 +862,30 @@ class Translator {
 		};
 	}
 
-	translateArithmetic(expr: ShellNode): ArithmeticExpressionNode {
-		const nodeType = expr.type;
+	translateArithmetic(expr: ArithmExpr): ArithmeticExpressionNode {
 		const start = this.#start(expr);
 		const end = this.#end(expr);
 
-		switch (nodeType) {
+		switch (expr.type) {
 			case "BinaryArithm":
 				return {
 					type: "BinaryArithmetic",
 					start,
 					end,
 					operator: this.#operatorBetween(
-						expr.x as ShellNode,
-						expr.y as ShellNode,
+						required(expr.x, "BinaryArithm.x"),
+						required(expr.y, "BinaryArithm.y"),
 					),
-					left: this.translateArithmetic(expr.x as ShellNode),
-					right: this.translateArithmetic(expr.y as ShellNode),
+					left: this.translateArithmetic(
+						required(expr.x, "ArithmExpr.x"),
+					),
+					right: this.translateArithmetic(
+						required(expr.y, "ArithmExpr.y"),
+					),
 				};
 
 			case "UnaryArithm": {
-				const opPos = expr.opPos as ShellPos;
+				const opPos = expr.opPos;
 
 				return {
 					type: "UnaryArithmetic",
@@ -915,7 +897,9 @@ class Translator {
 							UNARY_ARITHMETIC_OPERATOR,
 						) ?? "+",
 					prefix: !expr.post,
-					argument: this.translateArithmetic(expr.x as ShellNode),
+					argument: this.translateArithmetic(
+						required(expr.x, "UnaryArithm.x"),
+					),
 				};
 			}
 
@@ -924,35 +908,36 @@ class Translator {
 					type: "ParenthesizedArithmetic",
 					start,
 					end,
-					expression: this.translateArithmetic(expr.x as ShellNode),
+					expression: this.translateArithmetic(
+						required(expr.x, "ParenArithm.x"),
+					),
 				};
 
 			default:
-				return this.translateWord(expr);
+				return this.translateWord(expr as Word);
 		}
 	}
 
-	translateTest(expr: ShellNode): TestExpressionNode {
-		const nodeType = expr.type;
+	translateTest(expr: TestExpr): TestExpressionNode {
 		const start = this.#start(expr);
 		const end = this.#end(expr);
 
-		switch (nodeType) {
+		switch (expr.type) {
 			case "BinaryTest":
 				return {
 					type: "BinaryTest",
 					start,
 					end,
 					operator: this.#operatorBetween(
-						expr.x as ShellNode,
-						expr.y as ShellNode,
+						required(expr.x, "BinaryTest.x"),
+						required(expr.y, "BinaryTest.y"),
 					),
-					left: this.translateTest(expr.x as ShellNode),
-					right: this.translateTest(expr.y as ShellNode),
+					left: this.translateTest(required(expr.x, "TestExpr.x")),
+					right: this.translateTest(required(expr.y, "TestExpr.y")),
 				};
 
 			case "UnaryTest": {
-				const opPos = expr.opPos as ShellPos;
+				const opPos = expr.opPos;
 				const opStart = this.#toChar(opPos.offset);
 				const match = /^\S+/u.exec(this.#text.slice(opStart));
 
@@ -961,7 +946,9 @@ class Translator {
 					start,
 					end,
 					operator: match ? (match[0] as string) : "!",
-					argument: this.translateTest(expr.x as ShellNode),
+					argument: this.translateTest(
+						required(expr.x, "UnaryTest.x"),
+					),
 				};
 			}
 
@@ -970,11 +957,13 @@ class Translator {
 					type: "ParenthesizedTest",
 					start,
 					end,
-					expression: this.translateTest(expr.x as ShellNode),
+					expression: this.translateTest(
+						required(expr.x, "ParenTest.x"),
+					),
 				};
 
 			default:
-				return this.translateWord(expr);
+				return this.translateWord(expr as Word);
 		}
 	}
 }
@@ -999,14 +988,14 @@ export function parseShell(
 		);
 	}
 
-	let file: ShellNode;
+	let file: File;
 
 	try {
 		file = parseSync(text, {
 			keepComments: true,
 			variant,
 			filepath: options.path ?? "<input>",
-		}) as ShellNode;
+		});
 	} catch (error) {
 		if (error instanceof ParseError) {
 			const byteOffset = error.pos?.offset ?? 0;
