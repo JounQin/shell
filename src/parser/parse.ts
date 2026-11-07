@@ -707,7 +707,7 @@ class Translator {
 					type: "SingleQuotedString",
 					start,
 					end,
-					value: part.value as string,
+					value: part.value,
 					dollar: Boolean(part.dollar),
 				};
 
@@ -765,7 +765,7 @@ class Translator {
 					operator:
 						(this.#operatorAt(start, EXTENDED_GLOB_OPERATOR) as
 							"@(" | "*(" | "+(" | "?(" | "!(") ?? "@(",
-					pattern: (part.pattern?.value ?? "") as string,
+					pattern: part.pattern?.value ?? "",
 				};
 
 			default:
@@ -802,7 +802,7 @@ class Translator {
 			operatorStart = bracket === -1 ? index.end : bracket + 1;
 		}
 
-		const rbrace = part.rbrace ? this.#toChar(part.rbrace.offset) : end;
+		const rbrace = this.#toChar(part.rbrace.offset);
 
 		if (part.slice) {
 			const slice = part.slice;
@@ -910,8 +910,25 @@ class Translator {
 					),
 				};
 
+			case "Word":
+				return this.translateWord(expr);
+
 			default:
-				return this.translateWord(expr as Word);
+				// zsh subscript flags have no dedicated output node; keep their
+				// source text as a literal word instead of failing.
+				return {
+					type: "Word",
+					start,
+					end,
+					parts: [
+						{
+							type: "Literal",
+							start,
+							end,
+							value: this.#text.slice(start, end),
+						},
+					],
+				};
 		}
 	}
 
@@ -960,7 +977,7 @@ class Translator {
 				};
 
 			default:
-				return this.translateWord(expr as Word);
+				return this.translateWord(expr);
 		}
 	}
 }
