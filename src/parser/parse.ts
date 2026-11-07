@@ -1,6 +1,6 @@
 /**
  * @fileoverview Parses shell source code into an ESTree-style syntax tree by
- * wrapping the mvdan-sh parser (a GopherJS build of mvdan.cc/sh) and
+ * wrapping the sh-syntax parser (a WASM build of mvdan.cc/sh) and
  * translating its tree. See docs/syntax-tree.md for the tree format.
  * @author Claude Opus 5.5
  */
@@ -9,7 +9,7 @@
 // Imports
 //------------------------------------------------------------------------------
 
-import mvdan from "mvdan-sh";
+import { LangVariant, NodeType, ParseError, Walk, parseSync } from "sh-syntax";
 import type {
 	ArithmeticExpressionNode,
 	ArrayElementNode,
@@ -29,13 +29,22 @@ import type {
 	WordPartNode,
 } from "../types.js";
 
-const { syntax } = mvdan;
-
 //------------------------------------------------------------------------------
 // Helpers
 //------------------------------------------------------------------------------
 
-type MvdanNode = ReturnType<ReturnType<(typeof syntax)["NewParser"]>["Parse"]>;
+interface ShellPos {
+	Offset: number;
+	Line: number;
+	Col: number;
+}
+
+interface ShellNode {
+	Pos: ShellPos;
+	End: ShellPos;
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- tree fields vary by node type
+	[field: string]: any;
+}
 
 const REDIRECT_OPERATOR = /^(?:&>>|&>|>\||>>|>&|<<<|<<-|<<|<&|<>|<|>)/u;
 const UNARY_ARITHMETIC_OPERATOR = /^(?:\+\+|--|[-+!~])/u;
@@ -47,10 +56,10 @@ const LEADING_TRIVIA = /^(?:\s|#.*)*/u;
 // eslint-disable-next-line no-control-regex -- intentionally matches the full ASCII range.
 const NON_ASCII = /[^\x00-\x7f]/u;
 
-const VARIANTS = new Map<ShellVariant, number>([
-	["bash", syntax.LangBash],
-	["posix", syntax.LangPOSIX],
-	["mksh", syntax.LangMirBSDKorn],
+const VARIANTS = new Map<ShellVariant, LangVariant>([
+	["bash", LangVariant.LangBash],
+	["posix", LangVariant.LangPOSIX],
+	["mksh", LangVariant.LangMirBSDKorn],
 ]);
 
 /**
@@ -86,8 +95,8 @@ export interface ShellParseResult {
 }
 
 /**
- * Creates a converter from mvdan-sh byte offsets to JavaScript character
- * offsets. mvdan-sh reports positions as UTF-8 byte offsets, which only
+ * Creates a converter from sh-syntax byte offsets to JavaScript character
+ * offsets. sh-syntax reports positions as UTF-8 byte offsets, which only
  * match string indexes for ASCII-only sources.
  */
 function createByteToCharConverter(text: string): (byte: number) => number {
@@ -146,7 +155,7 @@ function locate(
 //------------------------------------------------------------------------------
 
 /**
- * Translates an mvdan-sh syntax tree into the ESTree-style tree documented
+ * Translates a sh-syntax tree into the ESTree-style tree documented
  * in docs/syntax-tree.md.
  */
 class Translator {
@@ -158,12 +167,12 @@ class Translator {
 		this.#toChar = createByteToCharConverter(text);
 	}
 
-	#start(node: MvdanNode): number {
-		return this.#toChar(node.Pos().Offset());
+	#start(node: ShellNode): number {
+		return this.#toChar(node.Pos.Offset);
 	}
 
-	#end(node: MvdanNode): number {
-		return this.#toChar(node.End().Offset());
+	#end(node: ShellNode): number {
+		return this.#toChar(node.End.Offset);
 	}
 
 	/**
@@ -171,7 +180,7 @@ class Translator {
 	 * e.g. the `&&` in `a && b`. Skips surrounding whitespace and any
 	 * comments on either side of the operator.
 	 */
-	#operatorBetween(left: MvdanNode, right: MvdanNode): string {
+	#operatorBetween(left: ShellNode, right: ShellNode): string {
 		const slice = this.#text
 			.slice(this.#end(left), this.#start(right))
 			.replace(LEADING_TRIVIA, "");
@@ -187,12 +196,12 @@ class Translator {
 	 * end past the operator, so the slice comes out empty. See the heredoc
 	 * section of `docs/syntax-tree.md`.
 	 */
-	#binaryCommandOperator(binary: MvdanNode): string {
-		const opPos = binary.OpPos as ReturnType<MvdanNode["Pos"]>;
+	#binaryCommandOperator(binary: ShellNode): string {
+		const opPos = binary.OpPos as ShellNode["Pos"];
 
 		return (
 			this.#operatorAt(
-				this.#toChar(opPos.Offset()),
+				this.#toChar(opPos.Offset),
 				BINARY_COMMAND_OPERATOR,
 			) ?? "||"
 		);
@@ -207,28 +216,30 @@ class Translator {
 		return match ? (match[0] as string) : null;
 	}
 
-	translateProgram(file: MvdanNode): ProgramNode {
+	translateProgram(file: ShellNode): ProgramNode {
 		return {
 			type: "Program",
 			start: 0,
 			end: this.#text.length,
-			body: (file.Stmts as MvdanNode[]).map(stmt =>
+			body: (file.Stmts as ShellNode[]).map(stmt =>
 				this.translateStatement(stmt),
 			),
 			comments: this.collectComments(file),
 		};
 	}
 
-	collectComments(file: MvdanNode): CommentNode[] {
+	collectComments(file: ShellNode): CommentNode[] {
 		const comments: CommentNode[] = [];
 
-		syntax.Walk(file, node => {
-			if (node && syntax.NodeType(node) === "Comment") {
+		Walk(file, node => {
+			if (node && NodeType(node) === "Comment") {
+				const comment = node as ShellNode;
+
 				comments.push({
 					type: "Comment",
-					start: this.#start(node),
-					end: this.#end(node),
-					text: node.Text as string,
+					start: this.#start(comment),
+					end: this.#end(comment),
+					text: comment.Text as string,
 				});
 			}
 
@@ -241,15 +252,15 @@ class Translator {
 	}
 
 	/**
-	 * Translates an mvdan `Stmt`, folding its statement-level properties
+	 * Translates a `Stmt`, folding its statement-level properties
 	 * (redirects, negation, background) into the command node.
 	 */
-	translateStatement(stmt: MvdanNode): StatementNode {
-		const node = this.#translateCommand(stmt.Cmd as MvdanNode | null);
+	translateStatement(stmt: ShellNode): StatementNode {
+		const node = this.#translateCommand(stmt.Cmd as ShellNode | null);
 
 		node.start = this.#start(stmt);
 		node.end = this.#end(stmt);
-		node.redirects = ((stmt.Redirs ?? []) as MvdanNode[]).map(redirect =>
+		node.redirects = ((stmt.Redirs ?? []) as ShellNode[]).map(redirect =>
 			this.translateRedirect(redirect),
 		);
 		node.negated = Boolean(stmt.Negated);
@@ -258,7 +269,7 @@ class Translator {
 		return node;
 	}
 
-	#statementBase(node: MvdanNode | null): {
+	#statementBase(node: ShellNode | null): {
 		start: number;
 		end: number;
 		redirects: RedirectNode[];
@@ -274,8 +285,8 @@ class Translator {
 		};
 	}
 
-	#translateCommand(cmd: MvdanNode | null): StatementNode {
-		const nodeType = cmd === null ? "nil" : syntax.NodeType(cmd);
+	#translateCommand(cmd: ShellNode | null): StatementNode {
+		const nodeType = cmd === null ? "nil" : NodeType(cmd);
 
 		switch (nodeType) {
 			case "nil":
@@ -289,15 +300,15 @@ class Translator {
 				};
 
 			case "CallExpr": {
-				const call = cmd as MvdanNode;
-				const args = (call.Args as MvdanNode[]).map(word =>
+				const call = cmd as ShellNode;
+				const args = (call.Args as ShellNode[]).map(word =>
 					this.translateWord(word),
 				);
 
 				return {
 					type: "Command",
 					...this.#statementBase(call),
-					assignments: (call.Assigns as MvdanNode[]).map(assign =>
+					assignments: (call.Assigns as ShellNode[]).map(assign =>
 						this.translateAssignment(assign),
 					),
 					name: args[0] ?? null,
@@ -306,7 +317,7 @@ class Translator {
 			}
 
 			case "BinaryCmd": {
-				const binary = cmd as MvdanNode;
+				const binary = cmd as ShellNode;
 				const operator = this.#binaryCommandOperator(binary);
 
 				if (operator === "|" || operator === "|&") {
@@ -317,21 +328,21 @@ class Translator {
 					type: "LogicalExpression",
 					...this.#statementBase(binary),
 					operator: operator === "&&" ? "&&" : "||",
-					left: this.translateStatement(binary.X as MvdanNode),
-					right: this.translateStatement(binary.Y as MvdanNode),
+					left: this.translateStatement(binary.X as ShellNode),
+					right: this.translateStatement(binary.Y as ShellNode),
 				};
 			}
 
 			case "IfClause":
-				return this.#translateIfClause(cmd as MvdanNode);
+				return this.#translateIfClause(cmd as ShellNode);
 
 			case "WhileClause": {
-				const clause = cmd as MvdanNode;
+				const clause = cmd as ShellNode;
 				const base = this.#statementBase(clause);
-				const test = (clause.Cond as MvdanNode[]).map(stmt =>
+				const test = (clause.Cond as ShellNode[]).map(stmt =>
 					this.translateStatement(stmt),
 				);
-				const body = (clause.Do as MvdanNode[]).map(stmt =>
+				const body = (clause.Do as ShellNode[]).map(stmt =>
 					this.translateStatement(stmt),
 				);
 
@@ -341,25 +352,25 @@ class Translator {
 			}
 
 			case "ForClause": {
-				const clause = cmd as MvdanNode;
+				const clause = cmd as ShellNode;
 				const base = this.#statementBase(clause);
-				const body = (clause.Do as MvdanNode[]).map(stmt =>
+				const body = (clause.Do as ShellNode[]).map(stmt =>
 					this.translateStatement(stmt),
 				);
-				const loop = clause.Loop as MvdanNode;
+				const loop = clause.Loop as ShellNode;
 
-				if (syntax.NodeType(loop) === "CStyleLoop") {
+				if (NodeType(loop) === "CStyleLoop") {
 					return {
 						type: "ArithmeticForStatement",
 						...base,
 						init: loop.Init
-							? this.translateArithmetic(loop.Init as MvdanNode)
+							? this.translateArithmetic(loop.Init as ShellNode)
 							: null,
 						test: loop.Cond
-							? this.translateArithmetic(loop.Cond as MvdanNode)
+							? this.translateArithmetic(loop.Cond as ShellNode)
 							: null,
 						update: loop.Post
-							? this.translateArithmetic(loop.Post as MvdanNode)
+							? this.translateArithmetic(loop.Post as ShellNode)
 							: null,
 						body,
 					};
@@ -369,9 +380,9 @@ class Translator {
 					type: "ForStatement",
 					...base,
 					variable: loop.Name
-						? this.#translateIdentifier(loop.Name as MvdanNode)
+						? this.#translateIdentifier(loop.Name as ShellNode)
 						: null,
-					words: ((loop.Items ?? []) as MvdanNode[]).map(word =>
+					words: ((loop.Items ?? []) as ShellNode[]).map(word =>
 						this.translateWord(word),
 					),
 					body,
@@ -380,13 +391,13 @@ class Translator {
 			}
 
 			case "CaseClause": {
-				const clause = cmd as MvdanNode;
+				const clause = cmd as ShellNode;
 
 				return {
 					type: "CaseStatement",
 					...this.#statementBase(clause),
-					discriminant: this.translateWord(clause.Word as MvdanNode),
-					cases: (clause.Items as MvdanNode[]).map(item =>
+					discriminant: this.translateWord(clause.Word as ShellNode),
+					cases: (clause.Items as ShellNode[]).map(item =>
 						this.#translateCaseItem(item),
 					),
 				};
@@ -396,7 +407,7 @@ class Translator {
 				return {
 					type: "BlockStatement",
 					...this.#statementBase(cmd),
-					body: ((cmd as MvdanNode).Stmts as MvdanNode[]).map(stmt =>
+					body: ((cmd as ShellNode).Stmts as ShellNode[]).map(stmt =>
 						this.translateStatement(stmt),
 					),
 				};
@@ -405,19 +416,19 @@ class Translator {
 				return {
 					type: "Subshell",
 					...this.#statementBase(cmd),
-					body: ((cmd as MvdanNode).Stmts as MvdanNode[]).map(stmt =>
+					body: ((cmd as ShellNode).Stmts as ShellNode[]).map(stmt =>
 						this.translateStatement(stmt),
 					),
 				};
 
 			case "FuncDecl": {
-				const decl = cmd as MvdanNode;
+				const decl = cmd as ShellNode;
 
 				return {
 					type: "FunctionDeclaration",
 					...this.#statementBase(decl),
-					id: this.#translateIdentifier(decl.Name as MvdanNode),
-					body: this.translateStatement(decl.Body as MvdanNode),
+					id: this.#translateIdentifier(decl.Name as ShellNode),
+					body: this.translateStatement(decl.Body as ShellNode),
 				};
 			}
 
@@ -426,59 +437,59 @@ class Translator {
 					type: "TestCommand",
 					...this.#statementBase(cmd),
 					expression: this.translateTest(
-						(cmd as MvdanNode).X as MvdanNode,
+						(cmd as ShellNode).X as ShellNode,
 					),
 				};
 
 			case "ArithmCmd": {
-				const arith = cmd as MvdanNode;
+				const arith = cmd as ShellNode;
 
 				return {
 					type: "ArithmeticCommand",
 					...this.#statementBase(arith),
 					expression: arith.X
-						? this.translateArithmetic(arith.X as MvdanNode)
+						? this.translateArithmetic(arith.X as ShellNode)
 						: null,
 				};
 			}
 
 			case "DeclClause": {
-				const decl = cmd as MvdanNode;
+				const decl = cmd as ShellNode;
 
 				return {
 					type: "DeclarationCommand",
 					...this.#statementBase(decl),
-					kind: (decl.Variant as MvdanNode).Value as string,
-					arguments: (decl.Args as MvdanNode[]).map(assign =>
+					kind: (decl.Variant as ShellNode).Value as string,
+					arguments: (decl.Args as ShellNode[]).map(assign =>
 						this.#translateDeclarationArgument(assign),
 					),
 				};
 			}
 
 			case "TimeClause": {
-				const clause = cmd as MvdanNode;
+				const clause = cmd as ShellNode;
 
 				return {
 					type: "TimeCommand",
 					...this.#statementBase(clause),
 					posix: Boolean(clause.PosixFormat),
 					body: clause.Stmt
-						? this.translateStatement(clause.Stmt as MvdanNode)
+						? this.translateStatement(clause.Stmt as ShellNode)
 						: null,
 				};
 			}
 
 			case "CoprocClause": {
-				const clause = cmd as MvdanNode;
+				const clause = cmd as ShellNode;
 
 				return {
 					type: "CoprocCommand",
 					...this.#statementBase(clause),
 					name: clause.Name
-						? this.translateWord(clause.Name as MvdanNode)
+						? this.translateWord(clause.Name as ShellNode)
 						: null,
 					body: clause.Stmt
-						? this.translateStatement(clause.Stmt as MvdanNode)
+						? this.translateStatement(clause.Stmt as ShellNode)
 						: null,
 				};
 			}
@@ -487,39 +498,37 @@ class Translator {
 				return {
 					type: "LetCommand",
 					...this.#statementBase(cmd),
-					expressions: ((cmd as MvdanNode).Exprs as MvdanNode[]).map(
+					expressions: ((cmd as ShellNode).Exprs as ShellNode[]).map(
 						expr => this.translateArithmetic(expr),
 					),
 				};
 
 			default:
-				throw new Error(`Unsupported mvdan-sh node type: ${nodeType}.`);
+				throw new Error(
+					`Unsupported sh-syntax node type: ${nodeType}.`,
+				);
 		}
 	}
 
-	#translatePipeline(binary: MvdanNode): StatementNode {
+	#translatePipeline(binary: ShellNode): StatementNode {
 		const commands: StatementNode[] = [];
 		const operators: ("|" | "|&")[] = [];
 
-		const collect = (stmt: MvdanNode): void => {
-			const inner = stmt.Cmd as MvdanNode | null;
+		const collect = (stmt: ShellNode): void => {
+			const inner = stmt.Cmd as ShellNode | null;
 			const isBare =
 				!stmt.Negated &&
 				!stmt.Background &&
-				((stmt.Redirs ?? []) as MvdanNode[]).length === 0;
+				((stmt.Redirs ?? []) as ShellNode[]).length === 0;
 
-			if (
-				inner !== null &&
-				isBare &&
-				syntax.NodeType(inner) === "BinaryCmd"
-			) {
+			if (inner !== null && isBare && NodeType(inner) === "BinaryCmd") {
 				const operator = this.#binaryCommandOperator(inner);
 
 				if (operator === "|" || operator === "|&") {
-					collect(inner.X as MvdanNode);
+					collect(inner.X as ShellNode);
 					operators.push(operator);
 					commands.push(
-						this.translateStatement(inner.Y as MvdanNode),
+						this.translateStatement(inner.Y as ShellNode),
 					);
 					return;
 				}
@@ -530,9 +539,9 @@ class Translator {
 
 		const operator = this.#binaryCommandOperator(binary) as "|" | "|&";
 
-		collect(binary.X as MvdanNode);
+		collect(binary.X as ShellNode);
 		operators.push(operator);
-		commands.push(this.translateStatement(binary.Y as MvdanNode));
+		commands.push(this.translateStatement(binary.Y as ShellNode));
 
 		return {
 			type: "Pipeline",
@@ -542,19 +551,19 @@ class Translator {
 		};
 	}
 
-	#translateIfClause(clause: MvdanNode): IfStatementNode {
+	#translateIfClause(clause: ShellNode): IfStatementNode {
 		let alternate: IfStatementNode | ElseClauseNode | null = null;
-		const elseClause = clause.Else as MvdanNode | null;
+		const elseClause = clause.Else as ShellNode | null;
 
 		if (elseClause) {
-			if ((elseClause.Cond as MvdanNode[]).length > 0) {
+			if ((elseClause.Cond as ShellNode[]).length > 0) {
 				alternate = this.#translateIfClause(elseClause);
 			} else {
 				alternate = {
 					type: "ElseClause",
 					start: this.#start(elseClause),
 					end: this.#end(elseClause),
-					body: (elseClause.Then as MvdanNode[]).map(stmt =>
+					body: (elseClause.Then as ShellNode[]).map(stmt =>
 						this.translateStatement(stmt),
 					),
 				};
@@ -564,40 +573,37 @@ class Translator {
 		return {
 			type: "IfStatement",
 			...this.#statementBase(clause),
-			test: (clause.Cond as MvdanNode[]).map(stmt =>
+			test: (clause.Cond as ShellNode[]).map(stmt =>
 				this.translateStatement(stmt),
 			),
-			consequent: (clause.Then as MvdanNode[]).map(stmt =>
+			consequent: (clause.Then as ShellNode[]).map(stmt =>
 				this.translateStatement(stmt),
 			),
 			alternate,
 		};
 	}
 
-	#translateCaseItem(item: MvdanNode): CaseClauseNode {
-		const opPos = item.OpPos as ReturnType<MvdanNode["Pos"]>;
-		const hasTerminator = opPos.Line() !== 0;
+	#translateCaseItem(item: ShellNode): CaseClauseNode {
+		const opPos = item.OpPos as ShellNode["Pos"];
+		const hasTerminator = opPos.Line !== 0;
 
 		return {
 			type: "CaseClause",
 			start: this.#start(item),
 			end: this.#end(item),
-			patterns: (item.Patterns as MvdanNode[]).map(word =>
+			patterns: (item.Patterns as ShellNode[]).map(word =>
 				this.translateWord(word),
 			),
-			body: (item.Stmts as MvdanNode[]).map(stmt =>
+			body: (item.Stmts as ShellNode[]).map(stmt =>
 				this.translateStatement(stmt),
 			),
 			terminator: hasTerminator
-				? this.#operatorAt(
-						this.#toChar(opPos.Offset()),
-						CASE_TERMINATOR,
-					)
+				? this.#operatorAt(this.#toChar(opPos.Offset), CASE_TERMINATOR)
 				: null,
 		};
 	}
 
-	#translateIdentifier(lit: MvdanNode): IdentifierNode {
+	#translateIdentifier(lit: ShellNode): IdentifierNode {
 		return {
 			type: "Identifier",
 			start: this.#start(lit),
@@ -606,68 +612,68 @@ class Translator {
 		};
 	}
 
-	translateAssignment(assign: MvdanNode): VariableAssignmentNode {
+	translateAssignment(assign: ShellNode): VariableAssignmentNode {
 		return {
 			type: "VariableAssignment",
 			start: this.#start(assign),
 			end: this.#end(assign),
 			name: assign.Name
-				? this.#translateIdentifier(assign.Name as MvdanNode)
+				? this.#translateIdentifier(assign.Name as ShellNode)
 				: null,
 			index: assign.Index
-				? this.translateArithmetic(assign.Index as MvdanNode)
+				? this.translateArithmetic(assign.Index as ShellNode)
 				: null,
 			value: assign.Value
-				? this.translateWord(assign.Value as MvdanNode)
+				? this.translateWord(assign.Value as ShellNode)
 				: null,
 			array: assign.Array
-				? this.#translateArray(assign.Array as MvdanNode)
+				? this.#translateArray(assign.Array as ShellNode)
 				: null,
 			append: Boolean(assign.Append),
 		};
 	}
 
 	/**
-	 * Declaration command arguments are all `Assign` nodes in mvdan-sh;
+	 * Declaration command arguments are all `Assign` nodes in sh-syntax;
 	 * plain words such as flags (`-x`) become nameless naked assigns.
 	 */
 	#translateDeclarationArgument(
-		assign: MvdanNode,
+		assign: ShellNode,
 	): VariableAssignmentNode | WordNode {
 		if (!assign.Name && assign.Naked && assign.Value) {
-			return this.translateWord(assign.Value as MvdanNode);
+			return this.translateWord(assign.Value as ShellNode);
 		}
 
 		return this.translateAssignment(assign);
 	}
 
-	#translateArray(array: MvdanNode): ArrayExpressionNode {
+	#translateArray(array: ShellNode): ArrayExpressionNode {
 		return {
 			type: "ArrayExpression",
 			start: this.#start(array),
 			end: this.#end(array),
-			elements: (array.Elems as MvdanNode[]).map(
+			elements: (array.Elems as ShellNode[]).map(
 				(element): ArrayElementNode => ({
 					type: "ArrayElement",
 					start: this.#start(element),
 					end: this.#end(element),
 					index: element.Index
-						? this.translateArithmetic(element.Index as MvdanNode)
+						? this.translateArithmetic(element.Index as ShellNode)
 						: null,
 					value: element.Value
-						? this.translateWord(element.Value as MvdanNode)
+						? this.translateWord(element.Value as ShellNode)
 						: null,
 				}),
 			),
 		};
 	}
 
-	translateRedirect(redirect: MvdanNode): RedirectNode {
-		const opPos = redirect.OpPos as ReturnType<MvdanNode["Pos"]>;
-		const opStart = this.#toChar(opPos.Offset());
+	translateRedirect(redirect: ShellNode): RedirectNode {
+		const opPos = redirect.OpPos as ShellNode["Pos"];
+		const opStart = this.#toChar(opPos.Offset);
 		const operator = this.#operatorAt(opStart, REDIRECT_OPERATOR) ?? ">";
-		const fdLit = redirect.N as MvdanNode | null;
-		const target = redirect.Word as MvdanNode | null;
+		const fdLit = redirect.N as ShellNode | null;
+		const target = redirect.Word as ShellNode | null;
 
 		return {
 			type: "Redirect",
@@ -677,24 +683,24 @@ class Translator {
 			fd: fdLit ? Number.parseInt(fdLit.Value as string, 10) : null,
 			target: target ? this.translateWord(target) : null,
 			heredoc: redirect.Hdoc
-				? this.translateWord(redirect.Hdoc as MvdanNode)
+				? this.translateWord(redirect.Hdoc as ShellNode)
 				: null,
 		};
 	}
 
-	translateWord(word: MvdanNode): WordNode {
+	translateWord(word: ShellNode): WordNode {
 		return {
 			type: "Word",
 			start: this.#start(word),
 			end: this.#end(word),
-			parts: (word.Parts as MvdanNode[]).map(part =>
+			parts: (word.Parts as ShellNode[]).map(part =>
 				this.translateWordPart(part),
 			),
 		};
 	}
 
-	translateWordPart(part: MvdanNode): WordPartNode {
-		const nodeType = syntax.NodeType(part);
+	translateWordPart(part: ShellNode): WordPartNode {
+		const nodeType = NodeType(part);
 		const start = this.#start(part);
 		const end = this.#end(part);
 
@@ -721,7 +727,7 @@ class Translator {
 					type: "DoubleQuotedString",
 					start,
 					end,
-					parts: (part.Parts as MvdanNode[]).map(inner =>
+					parts: (part.Parts as ShellNode[]).map(inner =>
 						this.translateWordPart(inner),
 					),
 					dollar: Boolean(part.Dollar),
@@ -735,7 +741,7 @@ class Translator {
 					type: "CommandSubstitution",
 					start,
 					end,
-					body: (part.Stmts as MvdanNode[]).map(stmt =>
+					body: (part.Stmts as ShellNode[]).map(stmt =>
 						this.translateStatement(stmt),
 					),
 					backquotes: this.#text[start] === "`",
@@ -751,7 +757,7 @@ class Translator {
 							start,
 							PROCESS_SUBSTITUTION_OPERATOR,
 						) as "<(" | ">(") ?? "<(",
-					body: (part.Stmts as MvdanNode[]).map(stmt =>
+					body: (part.Stmts as ShellNode[]).map(stmt =>
 						this.translateStatement(stmt),
 					),
 				};
@@ -762,7 +768,7 @@ class Translator {
 					start,
 					end,
 					expression: part.X
-						? this.translateArithmetic(part.X as MvdanNode)
+						? this.translateArithmetic(part.X as ShellNode)
 						: null,
 				};
 
@@ -774,7 +780,7 @@ class Translator {
 					operator:
 						(this.#operatorAt(start, EXTENDED_GLOB_OPERATOR) as
 							"@(" | "*(" | "+(" | "?(" | "!(") ?? "@(",
-					pattern: ((part.Pattern as MvdanNode)?.Value ??
+					pattern: ((part.Pattern as ShellNode)?.Value ??
 						"") as string,
 				};
 
@@ -790,12 +796,12 @@ class Translator {
 		}
 	}
 
-	#translateParameterExpansion(part: MvdanNode): WordPartNode {
+	#translateParameterExpansion(part: ShellNode): WordPartNode {
 		const start = this.#start(part);
 		const end = this.#end(part);
-		const param = part.Param as MvdanNode;
+		const param = part.Param as ShellNode;
 		const index = part.Index
-			? this.translateArithmetic(part.Index as MvdanNode)
+			? this.translateArithmetic(part.Index as ShellNode)
 			: null;
 
 		let operator: string | null = null;
@@ -815,26 +821,24 @@ class Translator {
 		}
 
 		const rbrace = part.Rbrace
-			? this.#toChar(
-					(part.Rbrace as ReturnType<MvdanNode["Pos"]>).Offset(),
-				)
+			? this.#toChar((part.Rbrace as ShellNode["Pos"]).Offset)
 			: end;
 
 		if (part.Slice) {
-			const slice = part.Slice as MvdanNode;
+			const slice = part.Slice as ShellNode;
 
 			operator = ":";
 			sliceOffset = slice.Offset
-				? this.translateArithmetic(slice.Offset as MvdanNode)
+				? this.translateArithmetic(slice.Offset as ShellNode)
 				: null;
 			sliceLength = slice.Length
-				? this.translateArithmetic(slice.Length as MvdanNode)
+				? this.translateArithmetic(slice.Length as ShellNode)
 				: null;
 		} else if (part.Repl) {
-			const repl = part.Repl as MvdanNode;
-			const orig = repl.Orig as MvdanNode | null;
+			const repl = part.Repl as ShellNode;
+			const orig = repl.Orig as ShellNode | null;
 			const origWord =
-				orig && (orig.Parts as MvdanNode[]).length > 0
+				orig && (orig.Parts as ShellNode[]).length > 0
 					? this.translateWord(orig)
 					: null;
 
@@ -846,12 +850,12 @@ class Translator {
 			word = origWord;
 			replacement =
 				repl.With &&
-				((repl.With as MvdanNode).Parts as MvdanNode[]).length > 0
-					? this.translateWord(repl.With as MvdanNode)
+				((repl.With as ShellNode).Parts as ShellNode[]).length > 0
+					? this.translateWord(repl.With as ShellNode)
 					: null;
 		} else if (part.Exp) {
-			const expansion = part.Exp as MvdanNode;
-			const expansionWord = expansion.Word as MvdanNode | null;
+			const expansion = part.Exp as ShellNode;
+			const expansionWord = expansion.Word as ShellNode | null;
 
 			word = expansionWord ? this.translateWord(expansionWord) : null;
 			operator = this.#text
@@ -878,8 +882,8 @@ class Translator {
 		};
 	}
 
-	translateArithmetic(expr: MvdanNode): ArithmeticExpressionNode {
-		const nodeType = syntax.NodeType(expr);
+	translateArithmetic(expr: ShellNode): ArithmeticExpressionNode {
+		const nodeType = NodeType(expr);
 		const start = this.#start(expr);
 		const end = this.#end(expr);
 
@@ -890,15 +894,15 @@ class Translator {
 					start,
 					end,
 					operator: this.#operatorBetween(
-						expr.X as MvdanNode,
-						expr.Y as MvdanNode,
+						expr.X as ShellNode,
+						expr.Y as ShellNode,
 					),
-					left: this.translateArithmetic(expr.X as MvdanNode),
-					right: this.translateArithmetic(expr.Y as MvdanNode),
+					left: this.translateArithmetic(expr.X as ShellNode),
+					right: this.translateArithmetic(expr.Y as ShellNode),
 				};
 
 			case "UnaryArithm": {
-				const opPos = expr.OpPos as ReturnType<MvdanNode["Pos"]>;
+				const opPos = expr.OpPos as ShellNode["Pos"];
 
 				return {
 					type: "UnaryArithmetic",
@@ -906,11 +910,11 @@ class Translator {
 					end,
 					operator:
 						this.#operatorAt(
-							this.#toChar(opPos.Offset()),
+							this.#toChar(opPos.Offset),
 							UNARY_ARITHMETIC_OPERATOR,
 						) ?? "+",
 					prefix: !expr.Post,
-					argument: this.translateArithmetic(expr.X as MvdanNode),
+					argument: this.translateArithmetic(expr.X as ShellNode),
 				};
 			}
 
@@ -919,7 +923,7 @@ class Translator {
 					type: "ParenthesizedArithmetic",
 					start,
 					end,
-					expression: this.translateArithmetic(expr.X as MvdanNode),
+					expression: this.translateArithmetic(expr.X as ShellNode),
 				};
 
 			default:
@@ -927,8 +931,8 @@ class Translator {
 		}
 	}
 
-	translateTest(expr: MvdanNode): TestExpressionNode {
-		const nodeType = syntax.NodeType(expr);
+	translateTest(expr: ShellNode): TestExpressionNode {
+		const nodeType = NodeType(expr);
 		const start = this.#start(expr);
 		const end = this.#end(expr);
 
@@ -939,16 +943,16 @@ class Translator {
 					start,
 					end,
 					operator: this.#operatorBetween(
-						expr.X as MvdanNode,
-						expr.Y as MvdanNode,
+						expr.X as ShellNode,
+						expr.Y as ShellNode,
 					),
-					left: this.translateTest(expr.X as MvdanNode),
-					right: this.translateTest(expr.Y as MvdanNode),
+					left: this.translateTest(expr.X as ShellNode),
+					right: this.translateTest(expr.Y as ShellNode),
 				};
 
 			case "UnaryTest": {
-				const opPos = expr.OpPos as ReturnType<MvdanNode["Pos"]>;
-				const opStart = this.#toChar(opPos.Offset());
+				const opPos = expr.OpPos as ShellNode["Pos"];
+				const opStart = this.#toChar(opPos.Offset);
 				const match = /^\S+/u.exec(this.#text.slice(opStart));
 
 				return {
@@ -956,7 +960,7 @@ class Translator {
 					start,
 					end,
 					operator: match ? (match[0] as string) : "!",
-					argument: this.translateTest(expr.X as MvdanNode),
+					argument: this.translateTest(expr.X as ShellNode),
 				};
 			}
 
@@ -965,7 +969,7 @@ class Translator {
 					type: "ParenthesizedTest",
 					start,
 					end,
-					expression: this.translateTest(expr.X as MvdanNode),
+					expression: this.translateTest(expr.X as ShellNode),
 				};
 
 			default:
@@ -994,29 +998,22 @@ export function parseShell(
 		);
 	}
 
-	const parser = syntax.NewParser(
-		syntax.KeepComments(true),
-		syntax.Variant(variant),
-	);
-
-	let file: MvdanNode;
+	let file: ShellNode;
 
 	try {
-		file = parser.Parse(text, options.path ?? "<input>");
+		file = parseSync(text, {
+			keepComments: true,
+			variant,
+			filepath: options.path ?? "<input>",
+		}) as ShellNode;
 	} catch (error) {
-		const parseError = error as {
-			Error?: () => string;
-			Text?: string;
-			Pos?: { Offset(): number };
-		};
-
-		if (typeof parseError?.Error === "function") {
-			const byteOffset = parseError.Pos?.Offset() ?? 0;
+		if (error instanceof ParseError) {
+			const byteOffset = error.Pos?.Offset ?? 0;
 			const offset = createByteToCharConverter(text)(byteOffset);
 			const { line, column } = locate(text, offset);
 
 			throw new ShellSyntaxError(
-				parseError.Text || parseError.Error(),
+				error.Text || error.message,
 				line,
 				column,
 				options.path,

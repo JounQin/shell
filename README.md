@@ -3,7 +3,7 @@
 A shell language plugin for [ESLint](https://eslint.org), providing:
 
 - an ESLint-style **parser** for shell scripts (wrapping
-  [mvdan-sh](https://www.npmjs.com/package/mvdan-sh), the parser behind
+  [sh-syntax](https://www.npmjs.com/package/sh-syntax), the parser behind
   `shfmt`) that produces an ESTree-style syntax tree,
 - an ESLint **language** implementation so rules can traverse that tree,
 - **rules** inspired by [ShellCheck](https://www.shellcheck.net) checks, and
