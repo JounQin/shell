@@ -308,13 +308,12 @@ class Translator {
 
 		switch (cmd.type) {
 			case "CallExpr": {
-				const call = cmd;
-				const args = call.args.map(word => this.translateWord(word));
+				const args = cmd.args.map(word => this.translateWord(word));
 
 				return {
 					type: "Command",
-					...this.#statementBase(call),
-					assignments: call.assigns.map(assign =>
+					...this.#statementBase(cmd),
+					assignments: cmd.assigns.map(assign =>
 						this.translateAssignment(assign),
 					),
 					name: args[0] ?? null,
@@ -323,22 +322,21 @@ class Translator {
 			}
 
 			case "BinaryCmd": {
-				const binary = cmd;
-				const operator = this.#binaryCommandOperator(binary);
+				const operator = this.#binaryCommandOperator(cmd);
 
 				if (operator === "|" || operator === "|&") {
-					return this.#translatePipeline(binary);
+					return this.#translatePipeline(cmd);
 				}
 
 				return {
 					type: "LogicalExpression",
-					...this.#statementBase(binary),
+					...this.#statementBase(cmd),
 					operator: operator === "&&" ? "&&" : "||",
 					left: this.translateStatement(
-						required(binary.x, "BinaryCmd.x"),
+						required(cmd.x, "BinaryCmd.x"),
 					),
 					right: this.translateStatement(
-						required(binary.y, "BinaryCmd.y"),
+						required(cmd.y, "BinaryCmd.y"),
 					),
 				};
 			}
@@ -347,27 +345,21 @@ class Translator {
 				return this.#translateIfClause(cmd);
 
 			case "WhileClause": {
-				const clause = cmd;
-				const base = this.#statementBase(clause);
-				const test = clause.cond.map(stmt =>
+				const base = this.#statementBase(cmd);
+				const test = cmd.cond.map(stmt =>
 					this.translateStatement(stmt),
 				);
-				const body = clause.do.map(stmt =>
-					this.translateStatement(stmt),
-				);
+				const body = cmd.do.map(stmt => this.translateStatement(stmt));
 
-				return clause.until
+				return cmd.until
 					? { type: "UntilStatement", ...base, test, body }
 					: { type: "WhileStatement", ...base, test, body };
 			}
 
 			case "ForClause": {
-				const clause = cmd;
-				const base = this.#statementBase(clause);
-				const body = clause.do.map(stmt =>
-					this.translateStatement(stmt),
-				);
-				const loop = required(clause.loop, "ForClause.loop");
+				const base = this.#statementBase(cmd);
+				const body = cmd.do.map(stmt => this.translateStatement(stmt));
+				const loop = required(cmd.loop, "ForClause.loop");
 
 				if (loop.type === "CStyleLoop") {
 					return {
@@ -396,22 +388,18 @@ class Translator {
 						this.translateWord(word),
 					),
 					body,
-					select: Boolean(clause.select),
+					select: Boolean(cmd.select),
 				};
 			}
 
 			case "CaseClause": {
-				const clause = cmd;
-
 				return {
 					type: "CaseStatement",
-					...this.#statementBase(clause),
+					...this.#statementBase(cmd),
 					discriminant: this.translateWord(
-						required(clause.word, "CaseClause.word"),
+						required(cmd.word, "CaseClause.word"),
 					),
-					cases: clause.items.map(item =>
-						this.#translateCaseItem(item),
-					),
+					cases: cmd.items.map(item => this.#translateCaseItem(item)),
 				};
 			}
 
@@ -430,16 +418,14 @@ class Translator {
 				};
 
 			case "FuncDecl": {
-				const decl = cmd;
-
 				return {
 					type: "FunctionDeclaration",
-					...this.#statementBase(decl),
+					...this.#statementBase(cmd),
 					id: this.#translateIdentifier(
-						required(decl.name, "FuncDecl.name"),
+						required(cmd.name, "FuncDecl.name"),
 					),
 					body: this.translateStatement(
-						required(decl.body, "FuncDecl.body"),
+						required(cmd.body, "FuncDecl.body"),
 					),
 				};
 			}
@@ -454,53 +440,39 @@ class Translator {
 				};
 
 			case "ArithmCmd": {
-				const arith = cmd;
-
 				return {
 					type: "ArithmeticCommand",
-					...this.#statementBase(arith),
-					expression: arith.x
-						? this.translateArithmetic(arith.x)
-						: null,
+					...this.#statementBase(cmd),
+					expression: cmd.x ? this.translateArithmetic(cmd.x) : null,
 				};
 			}
 
 			case "DeclClause": {
-				const decl = cmd;
-
 				return {
 					type: "DeclarationCommand",
-					...this.#statementBase(decl),
-					kind: required(decl.variant, "DeclClause.variant").value,
-					arguments: decl.args.map(assign =>
+					...this.#statementBase(cmd),
+					kind: required(cmd.variant, "DeclClause.variant").value,
+					arguments: cmd.args.map(assign =>
 						this.#translateDeclarationArgument(assign),
 					),
 				};
 			}
 
 			case "TimeClause": {
-				const clause = cmd;
-
 				return {
 					type: "TimeCommand",
-					...this.#statementBase(clause),
-					posix: Boolean(clause.posixFormat),
-					body: clause.stmt
-						? this.translateStatement(clause.stmt)
-						: null,
+					...this.#statementBase(cmd),
+					posix: Boolean(cmd.posixFormat),
+					body: cmd.stmt ? this.translateStatement(cmd.stmt) : null,
 				};
 			}
 
 			case "CoprocClause": {
-				const clause = cmd;
-
 				return {
 					type: "CoprocCommand",
-					...this.#statementBase(clause),
-					name: clause.name ? this.translateWord(clause.name) : null,
-					body: clause.stmt
-						? this.translateStatement(clause.stmt)
-						: null,
+					...this.#statementBase(cmd),
+					name: cmd.name ? this.translateWord(cmd.name) : null,
+					body: cmd.stmt ? this.translateStatement(cmd.stmt) : null,
 				};
 			}
 
