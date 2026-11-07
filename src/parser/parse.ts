@@ -244,13 +244,11 @@ class Translator {
 
 		walk(file, node => {
 			if (node.type === "Comment") {
-				const comment = node;
-
 				comments.push({
 					type: "Comment",
-					start: this.#start(comment),
-					end: this.#end(comment),
-					text: comment.text,
+					start: this.#start(node),
+					end: this.#end(node),
+					text: node.text,
 				});
 			}
 
