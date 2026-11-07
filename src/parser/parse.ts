@@ -14,6 +14,7 @@ import type {
 	ArithmExpr,
 	Assign,
 	ArrayExpr,
+	BinaryCmd,
 	CaseItem,
 	Command,
 	File,
@@ -49,8 +50,6 @@ import type {
 //------------------------------------------------------------------------------
 // Helpers
 //------------------------------------------------------------------------------
-
-type NodeOf<T extends Node["type"]> = Extract<Node, { type: T }>;
 
 const required = <T>(value: T | null, field: string): T => {
 	if (value === null) {
@@ -210,7 +209,7 @@ class Translator {
 	 * end past the operator, so the slice comes out empty. See the heredoc
 	 * section of `docs/syntax-tree.md`.
 	 */
-	#binaryCommandOperator(binary: NodeOf<"BinaryCmd">): string {
+	#binaryCommandOperator(binary: BinaryCmd): string {
 		const opPos = binary.opPos;
 
 		return (
@@ -523,7 +522,7 @@ class Translator {
 		}
 	}
 
-	#translatePipeline(binary: NodeOf<"BinaryCmd">): StatementNode {
+	#translatePipeline(binary: BinaryCmd): StatementNode {
 		const commands: StatementNode[] = [];
 		const operators: ("|" | "|&")[] = [];
 
