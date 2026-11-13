@@ -9,8 +9,7 @@
 // Imports
 //------------------------------------------------------------------------------
 
-import { LangVariant, ParseError, walk } from "sh-syntax";
-import { parse } from "sh-syntax/sync";
+import { LangVariant, ParseError, parse, walk } from "sh-syntax/sync";
 import type {
 	ArithmExpr,
 	Assign,
@@ -28,7 +27,7 @@ import type {
 	TestExpr,
 	Word,
 	WordPart,
-} from "sh-syntax";
+} from "sh-syntax/sync";
 import type {
 	ArithmeticExpressionNode,
 	ArrayElementNode,
