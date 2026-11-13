@@ -9,7 +9,8 @@
 // Imports
 //------------------------------------------------------------------------------
 
-import { LangVariant, ParseError, parseSync, walk } from "sh-syntax";
+import { LangVariant, ParseError, walk } from "sh-syntax";
+import { parse } from "sh-syntax/sync";
 import type {
 	ArithmExpr,
 	Assign,
@@ -977,7 +978,7 @@ export function parseShell(
 	let file: File;
 
 	try {
-		file = parseSync(text, {
+		file = parse(text, {
 			keepComments: true,
 			variant,
 			filepath: options.path ?? "<input>",

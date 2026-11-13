@@ -59,7 +59,7 @@
   "dependencies": {
     "@eslint/core": "^1.2.1",
     "@eslint/plugin-kit": "^0.7.3",
-    "sh-syntax": "^0.8.2"
+    "sh-syntax": "^0.8.4"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
