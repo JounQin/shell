@@ -59,7 +59,7 @@
   "dependencies": {
     "@eslint/core": "^1.2.1",
     "@eslint/plugin-kit": "^0.7.3",
-    "mvdan-sh": "^0.10.1"
+    "sh-syntax": "^0.8.4"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

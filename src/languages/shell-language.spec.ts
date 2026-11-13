@@ -50,7 +50,7 @@ describe("ShellLanguage", () => {
 
 	describe("validateLanguageOptions", () => {
 		it("should accept empty language options", () => {
-			expect(() => language.validateLanguageOptions({})).not.toThrow();
+			expect(() => language.validateLanguageOptions()).not.toThrow();
 		});
 	});
 

@@ -1,8 +1,8 @@
 # Shell Syntax Tree Format
 
 `@eslint/shell` parses shell source code into an ESTree-style syntax tree by
-wrapping the [mvdan-sh](https://www.npmjs.com/package/mvdan-sh) parser (a
-JavaScript build of [mvdan.cc/sh](https://github.com/mvdan/sh), the parser
+wrapping the [sh-syntax](https://www.npmjs.com/package/sh-syntax) parser (a
+WASM build of [mvdan.cc/sh](https://github.com/mvdan/sh), the parser
 behind `shfmt`) and translating its output.
 
 ## Positions
@@ -26,7 +26,7 @@ const loc = sourceCode.getLoc(node); // { start: { line, column }, end: ... }
 ```
 
 Lines and columns are 1-based. Offsets are JavaScript character offsets
-(mvdan-sh's UTF-8 byte offsets are converted during translation).
+(sh-syntax's UTF-8 byte offsets are converted during translation).
 
 ### Heredoc bodies
 
@@ -72,7 +72,7 @@ The same effect can push a node past its own parent. In
 `Command` spans `[0, 28]`, because that command's range is stretched by the
 body it declares.
 
-This is deliberate. `mvdan-sh` reports the body's true source position and
+This is deliberate. `sh-syntax` reports the body's true source position and
 the translation preserves it. Stretching every statement to cover its
 bodies would be worse: it would make a statement appear to span lines that
 hold unrelated later statements.
