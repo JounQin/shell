@@ -9,7 +9,13 @@
 // Imports
 //------------------------------------------------------------------------------
 
-import { LangVariant, ParseError, parse, walk } from "sh-syntax/sync";
+import {
+	LangVariant,
+	ParseError,
+	createSourceIndex,
+	parse,
+	walk,
+} from "sh-syntax/sync";
 import type {
 	ArithmExpr,
 	Assign,
@@ -66,9 +72,6 @@ const EXTENDED_GLOB_OPERATOR = /^[?*+@!]\(/u;
 const BINARY_COMMAND_OPERATOR = /^(?:\|&|\|\||&&|\|)/u;
 const CASE_TERMINATOR = /^(?:;;&|;;|;&|;\|)/u;
 const LEADING_TRIVIA = /^(?:\s|#.*)*/u;
-// eslint-disable-next-line no-control-regex -- intentionally matches the full ASCII range.
-const NON_ASCII = /[^\x00-\x7f]/u;
-
 const VARIANTS = new Map<ShellVariant, LangVariant>([
 	["bash", LangVariant.LangBash],
 	["posix", LangVariant.LangPOSIX],
@@ -108,42 +111,6 @@ export interface ShellParseResult {
 }
 
 /**
- * Creates a converter from sh-syntax byte offsets to JavaScript character
- * offsets. sh-syntax reports positions as UTF-8 byte offsets, which only
- * match string indexes for ASCII-only sources.
- */
-function createByteToCharConverter(text: string): (byte: number) => number {
-	if (!NON_ASCII.test(text)) {
-		return byte => byte;
-	}
-
-	const map: number[] = [];
-	let charIndex = 0;
-
-	for (const char of text) {
-		const codePoint = char.codePointAt(0) as number;
-		const byteLength =
-			codePoint <= 0x7f
-				? 1
-				: codePoint <= 0x7ff
-					? 2
-					: codePoint <= 0xffff
-						? 3
-						: 4;
-
-		for (let i = 0; i < byteLength; i++) {
-			map.push(charIndex);
-		}
-
-		charIndex += char.length;
-	}
-
-	map.push(charIndex);
-
-	return byte => map[Math.min(byte, map.length - 1)] as number;
-}
-
-/**
  * Computes a 1-based line and column pair for a character offset.
  */
 function locate(
@@ -177,7 +144,7 @@ class Translator {
 
 	constructor(text: string) {
 		this.#text = text;
-		this.#toChar = createByteToCharConverter(text);
+		this.#toChar = createSourceIndex(text);
 	}
 
 	#start(node: Node): number {
@@ -985,7 +952,7 @@ export function parseShell(
 	} catch (error) {
 		if (error instanceof ParseError) {
 			const byteOffset = error.pos?.offset ?? 0;
-			const offset = createByteToCharConverter(text)(byteOffset);
+			const offset = createSourceIndex(text)(byteOffset);
 			const { line, column } = locate(text, offset);
 
 			throw new ShellSyntaxError(
